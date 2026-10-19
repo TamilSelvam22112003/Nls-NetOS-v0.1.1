@@ -17,6 +17,7 @@ type Entry struct { Prefix netip.Prefix; Action Action }
 type Policy struct { mu sync.RWMutex; entries []Entry; generation uint64 }
 func NewPolicy() *Policy { return &Policy{} }
 func (p *Policy) Generation() uint64 { p.mu.RLock();defer p.mu.RUnlock();return p.generation }
+func (p *Policy) Entries() []Entry { p.mu.RLock();defer p.mu.RUnlock();return append([]Entry(nil),p.entries...) }
 func (p *Policy) Replace(generation uint64,entries []Entry) error {
 	if generation==0{return errors.New("policy generation must be nonzero")}
 	candidate:=append([]Entry(nil),entries...)

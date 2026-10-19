@@ -3,6 +3,8 @@ package dataplane
 import (
 	"bytes"
 	"encoding/binary"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"net/netip"
 	"testing"
@@ -12,8 +14,8 @@ func pair(t *testing.T)(*Session,*Session) {
 	t.Helper();var nonceID [16]byte;nonceID[0]=7
 	var i2r,r2i [32]byte;var si,sr [4]byte;i2r[0]=1;r2i[0]=2;si[0]=3;sr[0]=4
 	now:=time.Unix(1800000000,0)
-	i,err:=NewSession(Config{SessionID:7,NonceID:nonceID,SendKey:i2r,ReceiveKey:r2i,SendSalt:si,ReceiveSalt:sr,Now:func()time.Time{return now}});if err!=nil{t.Fatal(err)}
-	r,err:=NewSession(Config{SessionID:7,NonceID:nonceID,SendKey:r2i,ReceiveKey:i2r,SendSalt:sr,ReceiveSalt:si,Now:func()time.Time{return now}});if err!=nil{t.Fatal(err)}
+	i,err:=NewSession(Config{SessionID:7,NonceID:nonceID,SendKey:i2r,ReceiveKey:r2i,SendSalt:si,ReceiveSalt:sr,Now:func()time.Time{return now},LocalIsInitiator:true});if err!=nil{t.Fatal(err)}
+	r,err:=NewSession(Config{SessionID:7,NonceID:nonceID,SendKey:r2i,ReceiveKey:i2r,SendSalt:sr,ReceiveSalt:si,Now:func()time.Time{return now},LocalIsInitiator:false});if err!=nil{t.Fatal(err)}
 	return i,r
 }
 func ipv4Packet(payload []byte)[]byte { p:=make([]byte,20+len(payload));p[0]=0x45;binary.BigEndian.PutUint16(p[2:4],uint16(len(p)));p[8]=64;p[9]=17;copy(p[12:16],[]byte{10,0,0,1});copy(p[16:20],[]byte{10,0,0,2});copy(p[20:],payload);return p }
@@ -56,7 +58,7 @@ func TestRekeyInstallSwitchesKeysAndResetsCounters(t *testing.T) {
 	got,err:=r.Decrypt(wire);if err!=nil{t.Fatal(err)};if string(got[20:])!="after rekey"{t.Fatal("post-rekey plaintext mismatch")}
 }
 func TestRekeyThresholdAndHardStop(t *testing.T) {
-	var nonce [16]byte
+	var nonce [16]byte;nonce[0]=1
 	s,err:=NewSession(Config{SessionID:1,NonceID:nonce,InnerMTU:1396,RekeyAfterPackets:2,HardStopPackets:5,RekeyAfter:time.Hour});if err!=nil{t.Fatal(err)}
 	for n:=0;n<2;n++ {if _,err=s.Encrypt(ipv4Packet(nil));err!=nil{t.Fatal(err)}}
 	if _,err=s.Encrypt(ipv4Packet(nil));!errors.Is(err,ErrRekeyRequired){t.Fatalf("expected rekey required, got %v",err)}
@@ -70,4 +72,22 @@ func TestMSSAndMTUArithmetic(t *testing.T) {
 	v4,v6,err:=MSSClamp(1500);if err!=nil||v4!=1356||v6!=1336{t.Fatalf("MSS=%d/%d err=%v",v4,v6,err)}
 	if _,err=InnerMTU(1300);err==nil{t.Fatal("path MTU too small for IPv6 must fail")}
 	_ = netip.Addr{}
+}
+
+func TestRekeyWireRoundTrip(t *testing.T) {
+	pubI,privI,err:=ed25519.GenerateKey(rand.Reader);if err!=nil{t.Fatal(err)}
+	pubR,privR,err:=ed25519.GenerateKey(rand.Reader);if err!=nil{t.Fatal(err)}
+	var nonceID [16]byte;nonceID[0]=5
+	var i2r,r2i [32]byte;i2r[0]=11;r2i[0]=12
+	var si,sr [4]byte;si[0]=13;sr[0]=14
+	var th [32]byte;th[0]=77
+	i,err:=NewSession(Config{SessionID:91,NonceID:nonceID,SendKey:i2r,ReceiveKey:r2i,SendSalt:si,ReceiveSalt:sr,LocalPrivate:privI,PeerPublic:pubR,LocalIsInitiator:true,TranscriptHash:th});if err!=nil{t.Fatal(err)}
+	r,err:=NewSession(Config{SessionID:91,NonceID:nonceID,SendKey:r2i,ReceiveKey:i2r,SendSalt:sr,ReceiveSalt:si,LocalPrivate:privR,PeerPublic:pubI,LocalIsInitiator:false,TranscriptHash:th});if err!=nil{t.Fatal(err)}
+	init,err:=i.BeginRekey();if err!=nil{t.Fatal(err)}
+	retry,err:=i.BeginRekey();if err!=nil{t.Fatal(err)};if !bytes.Equal(init,retry){t.Fatal("rekey retransmission must be byte-identical")}
+	ack,commit,err:=r.AcceptRekey(init);if err!=nil{t.Fatal(err)}
+	if err=i.CompleteRekey(ack);err!=nil{t.Fatal(err)}
+	if err=commit();err!=nil{t.Fatal(err)}
+	packet,err:=i.Encrypt(ipv4Packet([]byte("rekeyed")));if err!=nil{t.Fatal(err)}
+	plain,err:=r.Decrypt(packet);if err!=nil{t.Fatal(err)};if string(plain[20:])!="rekeyed"{t.Fatal("rekey data mismatch")}
 }

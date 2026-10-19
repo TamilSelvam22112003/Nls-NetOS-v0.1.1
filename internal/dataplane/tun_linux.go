@@ -37,36 +37,45 @@ func (t *TUN) Read(p []byte)(int,error){return t.File.Read(p)}
 func (t *TUN) Write(p []byte)(int,error){return t.File.Write(p)}
 func (t *TUN) Close()error{return t.File.Close()}
 func runIP(args ...string)error { out,err:=exec.Command("ip",args...).CombinedOutput();if err!=nil{return fmt.Errorf("ip %s: %w: %s",strings.Join(args," "),err,strings.TrimSpace(string(out)))};return nil }
+func routeArgs(prefix netip.Prefix,args ...string)[]string { family:="-4";if prefix.Addr().Is6(){family="-6"};out:=[]string{family,"route"};return append(out,args...) }
 func InstallPolicyRoutes(tunName string,entries []Entry,old []Entry)error {
 	if tunName==""{return errors.New("TUN interface required")}
 	// Protect prefixes get a blackhole first, so a failed TUN route update cannot
 	// fall through to the ordinary default route and leak plaintext.
 	for _,e:=range entries {
 		if e.Action!=Protect{continue}
-		if err:=runIP("route","replace",e.Prefix.String(),"blackhole");err!=nil{return err}
-		if err:=runIP("route","replace",e.Prefix.String(),"dev",tunName);err!=nil{return err}
+		if err:=runIP(routeArgs(e.Prefix,"replace",e.Prefix.String(),"blackhole")...);err!=nil{return err}
+		if err:=runIP(routeArgs(e.Prefix,"replace",e.Prefix.String(),"dev",tunName)...);err!=nil{return err}
 	}
-	for _,e:=range old {
-		if e.Action!=Protect{continue}
-		found:=false;for _,n:=range entries{if n.Action==Protect&&n.Prefix==e.Prefix{found=true;break}}
-		if !found{if err:=runIP("route","del",e.Prefix.String());err!=nil{return err}}
-	}
+
 	return nil
 }
 func ConfigureMSSClamp(tunName string,pathMTU int)error {
 	mtu,err:=InnerMTU(pathMTU);if err!=nil{return err}
 	mss4,mss6:=mtu-40,mtu-60
-	for _,rule:=range [][]string{
-		{"-t","mangle","-C","FORWARD","-o",tunName,"-p","tcp","--tcp-flags","SYN,RST","SYN","-j","TCPMSS","--set-mss",fmt.Sprint(mss4)},
-		{"-t","mangle","-C","FORWARD","-o",tunName,"-p","ipv6-icmp","-j","RETURN"},
-	} {
-		_ = rule
-	}
-	for _,family:=range []struct{bin string;mss int}{{"iptables",mss4},{"ip6tables",mss6}} {
+ 	for _,family:=range []struct{bin string;mss int}{{"iptables",mss4},{"ip6tables",mss6}} {
 		check:=exec.Command(family.bin,"-t","mangle","-C","FORWARD","-o",tunName,"-p","tcp","--tcp-flags","SYN,RST","SYN","-j","TCPMSS","--set-mss",fmt.Sprint(family.mss))
 		if err:=check.Run();err==nil{continue}
 		cmd:=exec.Command(family.bin,"-t","mangle","-A","FORWARD","-o",tunName,"-p","tcp","--tcp-flags","SYN,RST","SYN","-j","TCPMSS","--set-mss",fmt.Sprint(family.mss))
 		if out,err:=cmd.CombinedOutput();err!=nil{return fmt.Errorf("%s MSS clamp: %w: %s",family.bin,err,strings.TrimSpace(string(out)))}
 	}
+	return nil
+}
+
+func RemoveObsoletePolicyRoutes(entries,old []Entry)error {
+	for _,e:=range old {
+		if e.Action!=Protect{continue}
+		found:=false;for _,n:=range entries{if n.Action==Protect&&n.Prefix==e.Prefix{found=true;break}}
+		if !found{if err:=runIP(routeArgs(e.Prefix,"del",e.Prefix.String())...);err!=nil{return err}}
+	}
+	return nil
+}
+func ApplyPolicyRoutes(p *Policy,generation uint64,entries []Entry,tunName string)error {
+	if p==nil{return errors.New("policy is required")}
+	candidate:=NewPolicy();if err:=candidate.Replace(generation,entries);err!=nil{return err}
+	old:=p.Entries()
+	if err:=InstallPolicyRoutes(tunName,entries,nil);err!=nil{return err}
+	if err:=p.Replace(generation,entries);err!=nil{return err}
+	if err:=RemoveObsoletePolicyRoutes(entries,old);err!=nil{return err}
 	return nil
 }
