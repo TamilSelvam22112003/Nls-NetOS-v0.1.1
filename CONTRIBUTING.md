@@ -1,0 +1,3 @@
+# Contributing
+
+Spec-first project. Do not implement feature code before the roadmap gate. The Core PROTOCOL.md contract is normative; changes require explicit review and golden-vector updates. Run `make fmt test lint build`. Do not read or copy v0.1.0 code. Report security issues privately.
