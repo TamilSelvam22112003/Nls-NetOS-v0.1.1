@@ -258,6 +258,7 @@ func (r *Responder) Serve(ctx context.Context,conn net.PacketConn,ingress string
 	if conn==nil{return errors.New("UDP connection required")}
 	localAddr,err:=netAddrPort(conn.LocalAddr());if err!=nil{return err}
 	if !localAddr.Addr().Is6()||localAddr.Addr().Is4In6(){return errors.New("responder socket must bind a specific IPv6 endpoint")}
+	if localAddr!=r.local.Endpoint{return errors.New("responder socket must match the local RDR endpoint")}
 	buf:=make([]byte,2048)
 	done:=make(chan struct{});defer close(done)
 	go func(){select{case <-ctx.Done():_ = conn.SetReadDeadline(time.Now());case <-done:}}()
@@ -267,9 +268,13 @@ func (r *Responder) Serve(ctx context.Context,conn net.PacketConn,ingress string
 		n,from,err:=conn.ReadFrom(buf)
 		if err!=nil{if ctx.Err()!=nil{return nil};if ne,ok:=err.(net.Error);ok&&ne.Timeout(){continue};return err}
 		source,err:=netAddrPort(from);if err!=nil{continue}
-		response,err:=r.Dispatch(ctx,append([]byte(nil),buf[:n]...),source,localAddr,ingress)
+		response,established,completedKey,err:=r.dispatch(ctx,append([]byte(nil),buf[:n]...),source,localAddr,ingress)
 		if err!=nil||len(response)==0{continue}
-		_,_=conn.WriteTo(response,from)
+		if _,err=conn.WriteTo(response,from);err!=nil{continue}
+		if established!=nil&&completedKey!=nil{
+			r.mu.Lock();delete(r.pending,*completedKey);r.mu.Unlock()
+			if r.cfg.OnEstablished!=nil{r.cfg.OnEstablished(*established)}
+		}
 	}
 }
 
@@ -315,31 +320,32 @@ func (r *Responder) HandleDatagram(ctx context.Context,raw []byte,source,destina
 	return m2raw,nil
 }
 
-func (r *Responder) HandleM3(ctx context.Context,raw []byte,source netip.AddrPort)([]byte,error){
-	m3,err:=parseFrame(raw,TypeM3,M3BodySize);if err!=nil{return nil,nil}
+func (r *Responder) handleM3(ctx context.Context,raw []byte,source netip.AddrPort)([]byte,*Session,*pendingKey,error){
+	m3,err:=parseFrame(raw,TypeM3,M3BodySize);if err!=nil{return nil,nil,nil,nil}
 	var prior [32]byte;copy(prior[:],m3.Body[:32])
 	key:=pendingKey{Source:source,Prior:prior}
 	now:=r.cfg.Now()
 	r.mu.Lock();r.expireLocked(now);pending,ok:=r.pending[key];r.mu.Unlock()
-	if !ok{return nil,nil}
-	defer func(){r.mu.Lock();delete(r.pending,key);r.mu.Unlock()}()
-	expectedPrior:=transcriptHash(pending.transcript);if subtle.ConstantTimeCompare(prior[:],expectedPrior[:])!=1{return nil,nil}
+	if !ok{return nil,nil,nil,nil}
+	completed:=false
+	defer func(){if !completed{r.mu.Lock();delete(r.pending,key);r.mu.Unlock()}}()
+	expectedPrior:=transcriptHash(pending.transcript);if subtle.ConstantTimeCompare(prior[:],expectedPrior[:])!=1{return nil,nil,nil,nil}
 	peer,err:=r.cfg.Directory.LookupForHandshake(ctx,pending.fields.InitiatorID)
-	if err!=nil{return nil,nil}
-	if peer.RouterID!=pending.fields.InitiatorID||peer.Endpoint.Port()!=source.Port()||peer.NotBefore.After(now)||!now.Before(peer.NotAfter){return nil,nil}
-	if binary.BigEndian.Uint16(m3.Body[32:34])!=80{return nil,nil}
+	if err!=nil{return nil,nil,nil,nil}
+	if peer.RouterID!=pending.fields.InitiatorID||peer.Endpoint.Port()!=source.Port()||peer.NotBefore.After(now)||!now.Before(peer.NotAfter){return nil,nil,nil,nil}
+	if binary.BigEndian.Uint16(m3.Body[32:34])!=80{return nil,nil,nil,nil}
 	sigInput:=signInput("NLS-v1-M3-SIG\x00",pending.transcript,m3.Body[:114])
-	if !ed25519.Verify(peer.PublicKey,sigInput,m3.Body[114:178]){return nil,nil}
-	gcm,err:=gcmFor(pending.keys.hsI2R[:]);if err!=nil{return nil,err}
-	plain,err:=gcm.Open(nil,zeroHandshakeNonce,m3.Body[34:114],aad(TypeM3,M3BodySize,prior));if err!=nil{return nil,nil}
-	if !checkIdentityPlain(plain,peer){return nil,nil}
+	if !ed25519.Verify(peer.PublicKey,sigInput,m3.Body[114:178]){return nil,nil,nil,nil}
+	gcm,err:=gcmFor(pending.keys.hsI2R[:]);if err!=nil{return nil,nil,nil,err}
+	plain,err:=gcm.Open(nil,zeroHandshakeNonce,m3.Body[34:114],aad(TypeM3,M3BodySize,prior));if err!=nil{return nil,nil,nil,nil}
+	if !checkIdentityPlain(plain,peer){return nil,nil,nil,nil}
 	transcript:=append(append([]byte{},pending.transcript...),raw...)
 	thM4:=transcriptHash(transcript)
 	body:=make([]byte,M4BodySize);copy(body[:32],thM4[:])
 	mac:=hmac.New(sha256.New,pending.keys.finishR[:]);_,_=mac.Write([]byte("NLS-v1-M4-FIN\x00"));_,_=mac.Write(thM4[:]);copy(body[32:],mac.Sum(nil))
-	r.mu.Lock();delete(r.pending,key);r.mu.Unlock()
-	if r.cfg.OnEstablished!=nil{r.cfg.OnEstablished(Session{LocalRouterID:r.local.RouterID,PeerRouterID:peer.RouterID,LocalEndpoint:r.local.Endpoint,PeerEndpoint:peer.Endpoint,SendKey:pending.keys.dataR2I,ReceiveKey:pending.keys.dataI2R,SendNoncePrefix:pending.keys.nonceR2I,ReceiveNoncePrefix:pending.keys.nonceI2R,CreatedAt:now.UTC()})}
-	return frame(TypeM4,body),nil
+	session:=Session{LocalRouterID:r.local.RouterID,PeerRouterID:peer.RouterID,LocalEndpoint:r.local.Endpoint,PeerEndpoint:peer.Endpoint,SendKey:pending.keys.dataR2I,ReceiveKey:pending.keys.dataI2R,SendNoncePrefix:pending.keys.nonceR2I,ReceiveNoncePrefix:pending.keys.nonceI2R,CreatedAt:now.UTC()}
+	completed=true
+	return frame(TypeM4,body),&session,&key,nil
 }
 
 func (r *Responder) expireLocked(now time.Time){
@@ -351,8 +357,10 @@ func (r *Responder) countPrefixLocked(addr netip.Addr)int{
 	return n
 }
 
-// The packet loop dispatches M3 only after cookie-validated M1 has allocated state.
-func (r *Responder) Dispatch(ctx context.Context,raw []byte,source,destination netip.AddrPort,ingress string)([]byte,error){
-	if len(raw)>=2&&raw[0]==WireVersion&&raw[1]==TypeM3{return r.HandleM3(ctx,raw,source)}
-	return r.HandleDatagram(ctx,raw,source,destination,ingress)
+// Dispatch routes M3 through authentication and returns a session only after a
+// valid M3; Serve installs that session only after M4 has been written.
+func (r *Responder) dispatch(ctx context.Context,raw []byte,source,destination netip.AddrPort,ingress string)([]byte,*Session,*pendingKey,error){
+	if len(raw)>=2&&raw[0]==WireVersion&&raw[1]==TypeM3{return r.handleM3(ctx,raw,source)}
+	response,err:=r.HandleDatagram(ctx,raw,source,destination,ingress)
+	return response,nil,nil,err
 }
