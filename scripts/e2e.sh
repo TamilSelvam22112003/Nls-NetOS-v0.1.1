@@ -103,6 +103,7 @@ ns "$R1" sysctl -qw net.ipv4.ip_forward=1
 ns "$R2" sysctl -qw net.ipv4.ip_forward=1
 ns "$R1" ip route add 10.30.0.0/24 via "$R2_WAN"
 ns "$R2" ip route add 10.10.0.0/24 via "$R1_WAN"
+ns "$R2" ip route add 10.40.0.0/24 via 10.41.0.2
 
 log "namespace topology ready: client -> local router -> destination router -> server; CA management links isolated"
 log "WAN capture starts on R1/R2 link (e2r1w/e2r2w)"
