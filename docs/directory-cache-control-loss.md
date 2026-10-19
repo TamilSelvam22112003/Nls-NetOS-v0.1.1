@@ -24,3 +24,5 @@ This document records the implementation of accepted ADR-0007 and the boundaries
 
 9. RDR reserved extension length: the RDR field table assigns bytes 128–257 (130 bytes) to the reserved extension, while the explanatory note calls it a 64-byte reserve. The verifier follows the fixed offsets and 258-byte unsigned body in the field table; the spec owner should reconcile the prose before declaring the layout unambiguous.
 10. Handshake integration: the current internal/handshake package was a scaffold and contains no M1–M4 state machine to call the new mandatory lookup gate. The gate and tests are implemented, but a later handshake implementation must call ResolvePeerForNewHandshake before accepting/creating a session; this change does not claim the absent handshake state machine is complete.
+
+11. Session teardown integration: control-status.json now reports DropExistingSessions at the ADR-0007 threshold, but no session manager/data plane exists in this branch to consume that signal and erase live session keys. The watchdog behavior is unit-tested; actual teardown must be wired into the session manager when that component is implemented.
