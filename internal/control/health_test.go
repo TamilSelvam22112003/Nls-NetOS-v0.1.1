@@ -18,3 +18,11 @@ func TestControlRecoveryClearsLossState(t *testing.T) {
 func TestNoPriorControlSuccessDoesNotClaimExistingSessions(t *testing.T) {
  g:=NewLossGuard(300*time.Second);state:=g.MarkFailure(time.Unix(1800000000,0).Add(time.Hour));if state.DropExistingSessions||state.LastSuccessUnixMS!=0{t.Fatalf("unexpected state %#v",state)}
 }
+
+func TestControlLossWatchdogExpiresSessionWithoutSocketError(t *testing.T) {
+	start:=time.Unix(1800000000,0)
+	g:=NewLossGuard(300*time.Second)
+	g.MarkSuccess(start)
+	if state:=g.Check(start.Add(300*time.Second));state.DropExistingSessions{t.Fatal("must not drop at exact threshold")}
+	if state:=g.Check(start.Add(301*time.Second));!state.DropExistingSessions||!state.ControlUnavailable{t.Fatalf("watchdog failed to expire session: %#v",state)}
+}

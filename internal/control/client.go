@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -82,18 +83,22 @@ func Run(ctx context.Context,o Options)error {
 	revPath:=filepath.Join(o.StateDir,"revocations.json")
 	healthPath:=filepath.Join(o.StateDir,"control-status.json")
 	guard:=NewLossGuard(o.ControlLossTimeout)
-	publish:=func(state HealthState){_ = writeJSONAtomic(healthPath,state,0600)}
+	healthMu:=&sync.Mutex{}
+	publish:=func(update func() HealthState){healthMu.Lock();defer healthMu.Unlock();_ = writeJSONAtomic(healthPath,update(),0600)}
+	watchDone:=make(chan struct{})
+	defer close(watchDone)
+	go func(){ticker:=time.NewTicker(time.Second);defer ticker.Stop();for{select{case <-ctx.Done():return;case <-watchDone:return;case now:=<-ticker.C:publish(func()HealthState{return guard.Check(now)})}}}()
 	for {
 		if ctx.Err()!=nil{return nil}
 		cfg:=&tls.Config{RootCAs:roots,ServerName:o.ServerName,Certificates:[]tls.Certificate{clientCert},MinVersion:tls.VersionTLS13,MaxVersion:tls.VersionTLS13}
 		dialer:=net.Dialer{Timeout:10*time.Second}
 		conn,err:=tls.DialWithDialer(&dialer,"tcp",o.Address,cfg)
 		if err==nil {
-			_ = runSession(ctx,conn,o.Interval,policyPath,revPath,func(now time.Time){publish(guard.MarkSuccess(now))})
+			_ = runSession(ctx,conn,o.Interval,policyPath,revPath,func(now time.Time){publish(func()HealthState{return guard.MarkSuccess(now)})})
 			_ = conn.Close()
 		}
 		if ctx.Err()!=nil{return nil}
-		publish(guard.MarkFailure(time.Now()))
+		publish(func()HealthState{return guard.MarkFailure(time.Now())})
 		// Control outages are recoverable: reconnect instead of exiting. The
 		// persisted health state flags sessions for teardown after the ADR-0007 deadline.
 		select{case <-ctx.Done():return nil;case <-time.After(o.Interval):}
