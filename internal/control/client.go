@@ -148,6 +148,7 @@ func parsePolicy(value []byte)(PolicyState,error) {
 	var out PolicyState
 	if len(value)<12{return out,errors.New("truncated policy sync")}
 	out.Generation=binary.BigEndian.Uint64(value[:8]);count:=binary.BigEndian.Uint32(value[8:12])
+	if out.Generation==0||count==0{return out,errors.New("policy generation and entry count must be nonzero")}
 	if count>4096{return out,errors.New("policy entry count exceeds limit")}
 	offset:=12
 	seen:=map[string]uint8{}
@@ -182,6 +183,7 @@ func parseRevocations(value []byte)(RevocationState,error) {
 	var out RevocationState
 	if len(value)<12{return out,errors.New("truncated revocation push")}
 	out.Generation=binary.BigEndian.Uint64(value[:8]);count:=binary.BigEndian.Uint32(value[8:12])
+	if out.Generation==0{return out,errors.New("revocation generation must be nonzero")}
 	if count>65536||uint64(len(value))!=12+uint64(count)*32{return out,errors.New("invalid revocation push length/count")}
 	offset:=12;last:=""
 	for i:=uint32(0);i<count;i++ {
