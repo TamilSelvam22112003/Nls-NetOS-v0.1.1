@@ -20,3 +20,33 @@ func TestPolicyRejectsConflictingOverlapAndHostBits(t *testing.T) {
 	if err:=p.Replace(1,[]Entry{{netip.MustParsePrefix("10.0.0.0/8"),Protect},{netip.MustParsePrefix("10.1.0.0/16"),Bypass}});err==nil{t.Fatal("conflicting overlap must reject policy")}
 	if err:=p.Replace(1,[]Entry{{netip.MustParsePrefix("10.1.2.3/24"),Protect}});err==nil{t.Fatal("host bits must reject policy")}
 }
+
+func TestPolicyRejectsProtectOverlapWithUnderlayControlOrRouting(t *testing.T) {
+	reserved := []netip.Prefix{
+		netip.MustParsePrefix("2001:db8:1::/64"), // router underlay
+		netip.MustParsePrefix("2001:db8:2::10/128"), // CA/control endpoint
+		netip.MustParsePrefix("224.0.0.0/24"), // IPv4 routing/control multicast
+	}
+	p := NewPolicy(reserved...)
+	for _, tc := range []struct {
+		name string
+		prefix netip.Prefix
+	}{
+		{"underlay containing protected prefix", netip.MustParsePrefix("2001:db8:1::/80")},
+		{"protected prefix containing CA address", netip.MustParsePrefix("2001:db8:2::/64")},
+		{"routing multicast", netip.MustParsePrefix("224.0.0.0/24")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := p.Replace(1, []Entry{{Prefix: tc.prefix, Action: Protect}}); err == nil {
+				t.Fatalf("PROTECT prefix %s overlaps a reserved address range but was accepted", tc.prefix)
+			}
+		})
+	}
+}
+
+func TestPolicyAllowsNonOverlappingProtectedPrefixWithGuard(t *testing.T) {
+	p := NewPolicy(netip.MustParsePrefix("2001:db8:1::/64"), netip.MustParsePrefix("2001:db8:2::10/128"))
+	if err := p.Replace(1, []Entry{{Prefix: netip.MustParsePrefix("2001:db8:30::/48"), Action: Protect}}); err != nil {
+		t.Fatalf("unrelated protected prefix rejected: %v", err)
+	}
+}
