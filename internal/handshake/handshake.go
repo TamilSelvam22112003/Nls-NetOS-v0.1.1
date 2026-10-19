@@ -174,7 +174,7 @@ func Initiate(ctx context.Context,cfg InitiatorConfig,peerID [16]byte,peerEndpoi
 
 func sendOnceWait(ctx context.Context,conn net.PacketConn,peer netip.AddrPort,request []byte,timeout time.Duration,accept func([]byte)bool)([]byte,error){
 	if err:=ctx.Err();err!=nil{return nil,err}
-	dst:=&net.UDPAddr{IP:net.IP(peer.Addr().AsSlice()),Port:peer.Port(),Zone:peer.Addr().Zone()}
+	dst:=&net.UDPAddr{IP:net.IP(peer.Addr().AsSlice()),Port:int(peer.Port()),Zone:peer.Addr().Zone()}
 	if _,err:=conn.WriteTo(request,dst);err!=nil{return nil,err}
 	deadline:=time.Now().Add(timeout);if d,ok:=ctx.Deadline();ok&&d.Before(deadline){deadline=d}
 	_ = conn.SetReadDeadline(deadline)
@@ -189,7 +189,7 @@ func sendOnceWait(ctx context.Context,conn net.PacketConn,peer netip.AddrPort,re
 }
 
 func sendWait(ctx context.Context,conn net.PacketConn,peer netip.AddrPort,request []byte,attempts int,interval time.Duration,accept func([]byte)bool)([]byte,error){
-	dst:=&net.UDPAddr{IP:net.IP(peer.Addr().AsSlice()),Port:peer.Port(),Zone:peer.Addr().Zone()}
+	dst:=&net.UDPAddr{IP:net.IP(peer.Addr().AsSlice()),Port:int(peer.Port()),Zone:peer.Addr().Zone()}
 	buf:=make([]byte,2048)
 	for i:=0;i<attempts;i++{
 		if err:=ctx.Err();err!=nil{return nil,err}
