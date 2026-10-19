@@ -15,4 +15,27 @@ jobs:
           cache: true
       - run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
       - run: make fmt
-      - run: make build test lint
+      - run: make build
+      - name: Validate shell scripts
+        run: |
+          bash -n scripts/install-router.sh
+          sh -n scripts/nls-router-control
+          bash -n scripts/e2e.sh
+      - name: Verify static binary
+        run: |
+          file bin/nls-router
+          file bin/nls-router | grep -q 'statically linked'
+      - run: make test lint
+      - name: Install/uninstall smoke test (Ubuntu 22.04 runner)
+        run: |
+          sudo env PATH="$PATH" bash scripts/install-router.sh install
+          test -x /usr/local/sbin/nls-router
+          test -f /etc/nls-router/router.env
+          test -f /etc/systemd/system/nls-router.service
+          sudo bash scripts/install-router.sh uninstall
+          test ! -e /usr/local/sbin/nls-router
+          test -d /etc/nls-router
+          test -d /var/lib/nls-router
+          sudo env PURGE_NLS_ROUTER=1 bash scripts/install-router.sh uninstall
+          test ! -e /etc/nls-router
+          test ! -e /var/lib/nls-router
