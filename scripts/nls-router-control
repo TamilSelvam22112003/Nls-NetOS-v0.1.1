@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+: "${CA_ADDRESS:?set CA_ADDRESS in /etc/nls-router/router.env}"
+: "${CA_TLS_NAME:?set CA_TLS_NAME in /etc/nls-router/router.env}"
+: "${CA_CERT:?set CA_CERT in /etc/nls-router/router.env}"
+: "${CA_FINGERPRINT:?set CA_FINGERPRINT in /etc/nls-router/router.env}"
+: "${ROUTER_CERT:?set ROUTER_CERT in /etc/nls-router/router.env}"
+: "${ROUTER_KEY:?set ROUTER_KEY in /etc/nls-router/router.env}"
+: "${STATE_DIR:=/var/lib/nls-router}"
+: "${SYNC_INTERVAL:=5s}"
+: "${CONTROL_LOSS_TIMEOUT:=5m}"
+exec /usr/local/sbin/nls-router control \
+  --address "$CA_ADDRESS" \
+  --tls-name "$CA_TLS_NAME" \
+  --ca-cert "$CA_CERT" \
+  --ca-fingerprint "$CA_FINGERPRINT" \
+  --cert "$ROUTER_CERT" \
+  --key "$ROUTER_KEY" \
+  --state-dir "$STATE_DIR" \
+  --interval "$SYNC_INTERVAL" \
+  --control-loss-timeout "$CONTROL_LOSS_TIMEOUT"
