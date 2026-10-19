@@ -74,7 +74,7 @@ func controlClient(args []string)error {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr,`NLS NetOS router client
+	fmt.Fprint(os.Stderr,`NLS NetOS router client
 Usage:
   nls-router keygen --name NAME [--key-out router-key.pem] [--csr-out router.csr.pem]
   nls-router enroll --address HOST:PORT --tls-name DNS --ca-cert ca-cert.pem --ca-fingerprint SHA256 --name NAME [--key router-key.pem] [--csr router.csr.pem]
