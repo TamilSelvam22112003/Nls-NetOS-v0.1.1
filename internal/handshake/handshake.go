@@ -133,7 +133,7 @@ func Initiate(ctx context.Context,cfg InitiatorConfig,peerID [16]byte,peerEndpoi
 	cookieM1:=buildM1(f)
 	transcript:=append(append(append([]byte{},initial...),cookieRaw...),cookieM1...)
 	th0:=transcriptHash(transcript)
-	m2raw,err:=sendWait(ctx,conn,peerEndpoint,cookieM1,3,time.Second,func(raw []byte)bool{_,e:=parseFrame(raw,TypeM2,M2BodySize);return e==nil})
+	m2raw,err:=sendOnceWait(ctx,conn,peerEndpoint,cookieM1,3*time.Second,func(raw []byte)bool{_,e:=parseFrame(raw,TypeM2,M2BodySize);return e==nil})
 	if err!=nil{return session,fmt.Errorf("M2: %w",err)}
 	m2,err:=parseFrame(m2raw,TypeM2,M2BodySize);if err!=nil{return session,err}
 	if subtle.ConstantTimeCompare(m2.Body[64:96],th0[:])!=1{return session,ErrTranscript}
@@ -154,11 +154,11 @@ func Initiate(ctx context.Context,cfg InitiatorConfig,peerID [16]byte,peerEndpoi
 	thPriorM3:=transcriptHash(transcript)
 	m3body:=make([]byte,M3BodySize);copy(m3body[:32],thPriorM3[:]);binary.BigEndian.PutUint16(m3body[32:34],80)
 	gcm,err=gcmFor(keys.hsI2R[:]);if err!=nil{return session,err}
-	encrypted:=gcm.Seal(nil,handshakeNonce()[:],identityPlain(local),aad(TypeM3,M3BodySize,thPriorM3))
+	encrypted:=gcm.Seal(nil,zeroHandshakeNonce,identityPlain(local),aad(TypeM3,M3BodySize,thPriorM3))
 	copy(m3body[34:114],encrypted)
 	sig:=ed25519.Sign(cfg.PrivateKey,signInput("NLS-v1-M3-SIG\x00",transcript,m3body[:114]));copy(m3body[114:],sig)
 	m3raw:=frame(TypeM3,m3body)
-	m4raw,err:=sendWait(ctx,conn,peerEndpoint,m3raw,3,time.Second,func(raw []byte)bool{_,e:=parseFrame(raw,TypeM4,M4BodySize);return e==nil})
+	m4raw,err:=sendOnceWait(ctx,conn,peerEndpoint,m3raw,3*time.Second,func(raw []byte)bool{_,e:=parseFrame(raw,TypeM4,M4BodySize);return e==nil})
 	if err!=nil{return session,fmt.Errorf("M4: %w",err)}
 	m4,err:=parseFrame(m4raw,TypeM4,M4BodySize);if err!=nil{return session,err}
 	transcript=append(transcript,m3raw...)
@@ -170,6 +170,22 @@ func Initiate(ctx context.Context,cfg InitiatorConfig,peerID [16]byte,peerEndpoi
 	released=true
 	session=Session{LocalRouterID:local.RouterID,PeerRouterID:peer.RouterID,LocalEndpoint:local.Endpoint,PeerEndpoint:peer.Endpoint,SendKey:keys.dataI2R,ReceiveKey:keys.dataR2I,SendNoncePrefix:keys.nonceI2R,ReceiveNoncePrefix:keys.nonceR2I,CreatedAt:time.Now().UTC()}
 	return session,nil
+}
+
+func sendOnceWait(ctx context.Context,conn net.PacketConn,peer netip.AddrPort,request []byte,timeout time.Duration,accept func([]byte)bool)([]byte,error){
+	if err:=ctx.Err();err!=nil{return nil,err}
+	dst:=&net.UDPAddr{IP:net.IP(peer.Addr().AsSlice()),Port:peer.Port(),Zone:peer.Addr().Zone()}
+	if _,err:=conn.WriteTo(request,dst);err!=nil{return nil,err}
+	deadline:=time.Now().Add(timeout);if d,ok:=ctx.Deadline();ok&&d.Before(deadline){deadline=d}
+	_ = conn.SetReadDeadline(deadline)
+	buf:=make([]byte,2048)
+	for{
+		n,from,err:=conn.ReadFrom(buf)
+		if err!=nil{if ne,ok:=err.(net.Error);ok&&ne.Timeout(){return nil,ErrHandshakeTimeout};if ctx.Err()!=nil{return nil,ctx.Err()};return nil,err}
+		got,e:=netAddrPort(from);if e!=nil||got!=peer{continue}
+		raw:=append([]byte(nil),buf[:n]...)
+		if accept(raw){return raw,nil}
+	}
 }
 
 func sendWait(ctx context.Context,conn net.PacketConn,peer netip.AddrPort,request []byte,attempts int,interval time.Duration,accept func([]byte)bool)([]byte,error){
@@ -286,7 +302,7 @@ func (r *Responder) HandleDatagram(ctx context.Context,raw []byte,source,destina
 	keys,err:=deriveSchedule(dh,th0);if err!=nil{return nil,err}
 	body:=make([]byte,M2BodySize);copy(body[:32],responderNonce[:]);copy(body[32:64],eph.PublicKey().Bytes());copy(body[64:96],th0[:]);binary.BigEndian.PutUint16(body[96:98],80)
 	gcm,err:=gcmFor(keys.hsR2I[:]);if err!=nil{return nil,err}
-	copy(body[98:178],gcm.Seal(nil,handshakeNonce()[:],identityPlain(r.local),aad(TypeM2,M2BodySize,th0)))
+	copy(body[98:178],gcm.Seal(nil,zeroHandshakeNonce,identityPlain(r.local),aad(TypeM2,M2BodySize,th0)))
 	binary.BigEndian.PutUint16(body[178:180],64)
 	sig:=ed25519.Sign(r.cfg.PrivateKey,signInput("NLS-v1-M2-SIG\x00",transcript,body[:180]));copy(body[180:],sig)
 	m2raw:=frame(TypeM2,body);transcript=append(transcript,m2raw...)
@@ -306,6 +322,7 @@ func (r *Responder) HandleM3(ctx context.Context,raw []byte,source netip.AddrPor
 	now:=r.cfg.Now()
 	r.mu.Lock();r.expireLocked(now);pending,ok:=r.pending[key];r.mu.Unlock()
 	if !ok{return nil,nil}
+	defer func(){r.mu.Lock();delete(r.pending,key);r.mu.Unlock()}()
 	expectedPrior:=transcriptHash(pending.transcript);if subtle.ConstantTimeCompare(prior[:],expectedPrior[:])!=1{return nil,nil}
 	peer,err:=r.cfg.Directory.LookupForHandshake(ctx,pending.fields.InitiatorID)
 	if err!=nil{return nil,nil}
@@ -314,7 +331,7 @@ func (r *Responder) HandleM3(ctx context.Context,raw []byte,source netip.AddrPor
 	sigInput:=signInput("NLS-v1-M3-SIG\x00",pending.transcript,m3.Body[:114])
 	if !ed25519.Verify(peer.PublicKey,sigInput,m3.Body[114:178]){return nil,nil}
 	gcm,err:=gcmFor(pending.keys.hsI2R[:]);if err!=nil{return nil,err}
-	plain,err:=gcm.Open(nil,handshakeNonce()[:],m3.Body[34:114],aad(TypeM3,M3BodySize,prior));if err!=nil{return nil,nil}
+	plain,err:=gcm.Open(nil,zeroHandshakeNonce,m3.Body[34:114],aad(TypeM3,M3BodySize,prior));if err!=nil{return nil,nil}
 	if !checkIdentityPlain(plain,peer){return nil,nil}
 	transcript:=append(append([]byte{},pending.transcript...),raw...)
 	thM4:=transcriptHash(transcript)
