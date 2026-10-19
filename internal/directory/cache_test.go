@@ -84,3 +84,19 @@ func TestHandshakeLookupTransportErrorDoesNotUseCachedRecord(t *testing.T) {
 		t.Fatalf("unreachable CA must deny handshake despite cached RDR, got %v",err)
 	}
 }
+
+func TestRevokedOnlineLookupEvictsCachedRDR(t *testing.T) {
+	caPub,caPriv,_:=ed25519.GenerateKey(rand.Reader)
+	now:=time.Now().UTC()
+	var id [16]byte
+	revoked:=false
+	lookup:=func(context.Context,[16]byte)(uint16,[]byte,error){
+		if revoked{return LookupRevoked,nil,nil}
+		return LookupFound,signedTestRDR(t,caPriv,id,now,1),nil
+	}
+	c,err:=NewCache(caPub,DefaultCacheTTL,lookup);if err!=nil{t.Fatal(err)}
+	if _,err=c.LookupForHandshake(context.Background(),id);err!=nil{t.Fatal(err)}
+	revoked=true
+	if _,err=c.LookupForHandshake(context.Background(),id);!errors.Is(err,ErrRevoked){t.Fatalf("expected revoked result, got %v",err)}
+	if _,ok:=c.GetCachedForDiagnostics(id);ok{t.Fatal("revoked router remained in trust cache")}
+}
