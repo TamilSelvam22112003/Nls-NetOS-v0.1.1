@@ -69,15 +69,15 @@ func (c *Cache) LookupForHandshake(ctx context.Context, routerID [16]byte) (Reco
 	status, raw, err := c.lookup(ctx, routerID)
 	if err != nil { return Record{}, fmt.Errorf("%w: %v",ErrCAUnavailable,err) }
 	switch status {
-	case LookupUnknown: return Record{},ErrUnknownRouter
-	case LookupRevoked: return Record{},ErrRevoked
+	case LookupUnknown: c.evict(routerID); return Record{},ErrUnknownRouter
+	case LookupRevoked: c.evict(routerID); return Record{},ErrRevoked
 	case LookupUnavailable: return Record{},ErrCAUnavailable
 	case LookupFound:
 	default: return Record{},fmt.Errorf("%w: unknown lookup status %d",ErrInvalidRDR,status)
 	}
 	record,err:=VerifyRDR(raw,c.caPublicKey,c.now())
-	if err!=nil{return Record{},err}
-	if subtle.ConstantTimeCompare(record.RouterID[:],routerID[:])!=1{return Record{},fmt.Errorf("%w: router ID does not match lookup",ErrInvalidRDR)}
+	if err!=nil{c.evict(routerID);return Record{},err}
+	if subtle.ConstantTimeCompare(record.RouterID[:],routerID[:])!=1{c.evict(routerID);return Record{},fmt.Errorf("%w: router ID does not match lookup",ErrInvalidRDR)}
 	c.mu.Lock()
 	c.records[routerID]=cachedRecord{record:cloneRecord(record),fetchedAt:c.now()}
 	c.mu.Unlock()
@@ -125,3 +125,5 @@ func VerifyRDR(raw []byte, caPublicKey ed25519.PublicKey, now time.Time) (Record
 }
 
 func cloneRecord(r Record) Record { r.PublicKey=append(ed25519.PublicKey(nil),r.PublicKey...);r.Raw=append([]byte(nil),r.Raw...);return r }
+
+func (c *Cache) evict(routerID [16]byte) { c.mu.Lock(); delete(c.records,routerID); c.mu.Unlock() }
