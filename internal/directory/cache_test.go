@@ -66,3 +66,21 @@ func TestCacheTTLAndClockRollback(t *testing.T) {
 	c.now=func()time.Time{return now.Add(-time.Second)}
 	if _,ok:=c.GetCachedForDiagnostics(id);ok{t.Fatal("clock rollback must not make cache fresh")}
 }
+
+func TestHandshakeLookupTransportErrorDoesNotUseCachedRecord(t *testing.T) {
+	caPub,caPriv,_:=ed25519.GenerateKey(rand.Reader)
+	now:=time.Now().UTC()
+	var id [16]byte
+	offline:=false
+	lookup:=func(context.Context,[16]byte)(uint16,[]byte,error){
+		if offline { return LookupUnavailable,nil,errors.New("connection refused") }
+		return LookupFound,signedTestRDR(t,caPriv,id,now,1),nil
+	}
+	c,err:=NewCache(caPub,DefaultCacheTTL,lookup)
+	if err!=nil { t.Fatal(err) }
+	if _,err=c.LookupForHandshake(context.Background(),id);err!=nil { t.Fatal(err) }
+	offline=true
+	if _,err=c.LookupForHandshake(context.Background(),id);!errors.Is(err,ErrCAUnavailable) {
+		t.Fatalf("unreachable CA must deny handshake despite cached RDR, got %v",err)
+	}
+}
