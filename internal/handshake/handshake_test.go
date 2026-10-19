@@ -83,7 +83,7 @@ func newPair(t *testing.T,lookupMode string,tamper byte)*pair{
 	initEP,err:=netAddrPort(initUDP.LocalAddr());if err!=nil{t.Fatal(err)}
 	initRecord,initRaw:=makeRDR(t,caPriv,initID,initPub,initEP,now,now.Add(-time.Minute),now.Add(time.Hour))
 	vip:=&testVIPProvider{conn:initUDP,vip:loop,mutateType:tamper}
-	respLookup:=func(_ context.Context,id [16]byte)(uint16,[]byte,error){if id==initID{return directory.LookupFound,initRaw,nil};return directory.LookupUnknown,nil,nil}
+	respLookup:=func(_ context.Context,id [16]byte)(uint16,[]byte,error){if id==initID{if lookupMode=="initiator-revoked"{return directory.LookupRevoked,nil,nil};return directory.LookupFound,initRaw,nil};return directory.LookupUnknown,nil,nil}
 	respDir,err:=directory.NewCache(caPub,time.Minute,respLookup);if err!=nil{t.Fatal(err)}
 	var cookieNow=time.Now
 	cookies,err:=NewCookieManager(cookieNow);if err!=nil{t.Fatal(err)}
@@ -141,12 +141,20 @@ func TestTamperedM3Rejected(t *testing.T){
 	_,p,err:=runPair(t,"valid",TypeM3);defer p.close()
 	if !errors.Is(err,ErrHandshakeTimeout){t.Fatalf("tampered M3 error=%v, want timeout after silent rejection",err)}
 	select{case <-p.established:t.Fatal("responder established a tampered M3");default:}
+	p.resp.mu.Lock();pendingCount:=len(p.resp.pending);p.resp.mu.Unlock();if pendingCount!=0{t.Fatalf("failed M3 left %d tentative states",pendingCount)}
 }
 
 func TestRevokedPeerRejected(t *testing.T){
 	_,p,err:=runPair(t,"revoked",0);defer p.close()
 	if !errors.Is(err,directory.ErrRevoked){t.Fatalf("revoked peer error=%v",err)}
 	if p.initVIP.released.Load()!=1{t.Fatal("temporary vIP not removed on revocation")}
+}
+
+func TestRevokedInitiatorRejectedByResponder(t *testing.T){
+	_,p,err:=runPair(t,"initiator-revoked",0);defer p.close()
+	if !errors.Is(err,ErrHandshakeTimeout){t.Fatalf("revoked initiator should be silently rejected, got %v",err)}
+	select{case <-p.established:t.Fatal("responder established a revoked initiator");default:}
+	p.resp.mu.Lock();pendingCount:=len(p.resp.pending);p.resp.mu.Unlock();if pendingCount!=0{t.Fatalf("revoked initiator left %d tentative states",pendingCount)}
 }
 
 func TestStaleRDRRejected(t *testing.T){
