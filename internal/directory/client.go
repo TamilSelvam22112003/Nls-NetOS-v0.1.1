@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -35,7 +36,7 @@ type TLSClientOptions struct {
 	Timeout time.Duration
 }
 
-type TLSClient struct { options TLSClientOptions; tlsConfig *tls.Config; timeout time.Duration }
+type TLSClient struct { options TLSClientOptions; tlsConfig *tls.Config; timeout time.Duration; caPublicKey ed25519.PublicKey }
 
 func NewTLSClient(o TLSClientOptions) (*TLSClient,error) {
 	if o.Address==""||o.ServerName==""||o.RootCertificatePath==""||o.RootFingerprint==""||o.CertificatePath==""||o.PrivateKeyPath=="" {
@@ -49,10 +50,11 @@ func NewTLSClient(o TLSClientOptions) (*TLSClient,error) {
 	if err!=nil||len(pin)!=sha256.Size{return nil,errors.New("root fingerprint must be 64 hexadecimal characters")}
 	actual:=sha256.Sum256(root.Raw)
 	if !bytes.Equal(pin,actual[:]){return nil,errors.New("Router-CA root fingerprint pin mismatch")}
+	caPub,ok:=root.PublicKey.(ed25519.PublicKey);if !ok{return nil,errors.New("Router-CA root key must be Ed25519")}
 	cert,err:=tls.LoadX509KeyPair(o.CertificatePath,o.PrivateKeyPath);if err!=nil{return nil,err}
 	roots:=x509.NewCertPool();roots.AddCert(root)
 	timeout:=o.Timeout;if timeout<=0{timeout=10*time.Second}
-	return &TLSClient{options:o,timeout:timeout,tlsConfig:&tls.Config{RootCAs:roots,ServerName:o.ServerName,Certificates:[]tls.Certificate{cert},MinVersion:tls.VersionTLS13,MaxVersion:tls.VersionTLS13}},nil
+	return &TLSClient{options:o,timeout:timeout,caPublicKey:append(ed25519.PublicKey(nil),caPub...),tlsConfig:&tls.Config{RootCAs:roots,ServerName:o.ServerName,Certificates:[]tls.Certificate{cert},MinVersion:tls.VersionTLS13,MaxVersion:tls.VersionTLS13}},nil
 }
 
 func (c *TLSClient) Lookup(ctx context.Context, routerID [16]byte)(uint16,[]byte,error) {
@@ -85,3 +87,6 @@ func (c *TLSClient) Lookup(ctx context.Context, routerID [16]byte)(uint16,[]byte
 func writeTLV(w io.Writer,typ uint16,value []byte)error { var h [6]byte;binary.BigEndian.PutUint16(h[:2],typ);binary.BigEndian.PutUint32(h[2:],uint32(len(value)));if err:=writeFull(w,h[:]);err!=nil{return err};return writeFull(w,value) }
 func readTLV(r io.Reader,max int)(uint16,[]byte,error) { var h [6]byte;if _,err:=io.ReadFull(r,h[:]);err!=nil{return 0,nil,err};n:=binary.BigEndian.Uint32(h[2:]);if uint64(n)>uint64(max){return 0,nil,errors.New("TLV exceeds limit")};value:=make([]byte,int(n));if _,err:=io.ReadFull(r,value);err!=nil{return 0,nil,err};return binary.BigEndian.Uint16(h[:2]),value,nil }
 func writeFull(w io.Writer,b []byte)error {for len(b)>0{n,err:=w.Write(b);if err!=nil{return err};if n==0{return io.ErrShortWrite};b=b[n:]};return nil}
+
+// CAPublicKey returns the pinned Router-CA Ed25519 key used to verify RDR signatures.
+func (c *TLSClient) CAPublicKey() ed25519.PublicKey { return append(ed25519.PublicKey(nil), c.caPublicKey...) }
