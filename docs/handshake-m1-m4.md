@@ -14,7 +14,7 @@ This package implements the frozen sequence in PROTOCOL.md §§6–7 and ADR-001
 
 ## Required configuration
 
-No unassigned policy defaults are invented. A responder must explicitly configure global, per-ingress-interface, and per-source-/64 M1 token-bucket rates/bursts, the ingress-interface allowlist, tracked-prefix cap, pending-state limits, and pending-state TTL. The accepted protocol default for pending M3 wait is 3 seconds; the configured TTL should be set to that value unless the protocol owner changes it.
+No unassigned policy defaults are invented. A responder must explicitly configure global, per-ingress-interface, and per-source-/64 M1 token-bucket rates/bursts, the ingress-interface allowlist, tracked-prefix cap/idle TTL, pending-state limits, and pending-state TTL. The accepted protocol default for pending M3 wait is 3 seconds; the configured TTL should be set to that value unless the protocol owner changes it.
 
 The Linux vIP provider requires explicit DAD timeout and polling interval because ADR-0005 does not state numeric values. It requires Linux `ip` and `ip6tables`, privilege to add/remove IPv6 addresses and firewall rules, a routed WAN prefix no longer than /64, a WAN address inside that prefix, and the router's advertised UDP port. IPv4-only WAN is unsupported.
 

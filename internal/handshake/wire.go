@@ -179,6 +179,7 @@ type LimitConfig struct {
 	PerPrefixRate float64
 	PerPrefixBurst float64
 	MaxTrackedPrefixes int
+	PrefixIdleTTL time.Duration
 	Interfaces []string
 }
 
@@ -199,7 +200,7 @@ type M1Limiter struct {
 }
 
 func NewM1Limiter(cfg LimitConfig)(*M1Limiter,error){
-	if cfg.GlobalRate<=0||cfg.GlobalBurst<1||cfg.PerInterfaceRate<=0||cfg.PerInterfaceBurst<1||cfg.PerPrefixRate<=0||cfg.PerPrefixBurst<1||cfg.MaxTrackedPrefixes<1||len(cfg.Interfaces)==0{return nil,errors.New("all M1 rate/burst limits, prefix cap, and allowed ingress interfaces must be configured")}
+	if cfg.GlobalRate<=0||cfg.GlobalBurst<1||cfg.PerInterfaceRate<=0||cfg.PerInterfaceBurst<1||cfg.PerPrefixRate<=0||cfg.PerPrefixBurst<1||cfg.MaxTrackedPrefixes<1||cfg.PrefixIdleTTL<=0||len(cfg.Interfaces)==0{return nil,errors.New("all M1 rate/burst limits, prefix cap/idle TTL, and allowed ingress interfaces must be configured")}
 	m:=&M1Limiter{cfg:cfg,interfaces:make(map[string]*tokenBucket),prefixes:make(map[netip.Prefix]*tokenBucket)}
 	for _,name:=range cfg.Interfaces{if name==""{return nil,errors.New("empty ingress interface in M1 limiter")};if _,ok:=m.interfaces[name];ok{return nil,errors.New("duplicate ingress interface in M1 limiter")};m.interfaces[name]=&tokenBucket{tokens:cfg.PerInterfaceBurst}}
 	return m,nil
@@ -210,6 +211,7 @@ func (m *M1Limiter) Allow(now time.Time,source netip.Addr,ingress string)bool{
 	prefix:=netip.PrefixFrom(source,64).Masked()
 	m.mu.Lock();defer m.mu.Unlock()
 	iface,ok:=m.interfaces[ingress];if !ok{return false}
+	for tracked,b:=range m.prefixes{if !now.Before(b.last)&&now.Sub(b.last)>m.cfg.PrefixIdleTTL{delete(m.prefixes,tracked)}}
 	bucket,ok:=m.prefixes[prefix]
 	if !ok { if len(m.prefixes)>=m.cfg.MaxTrackedPrefixes{return false};bucket=&tokenBucket{tokens:m.cfg.PerPrefixBurst};m.prefixes[prefix]=bucket }
 	if !m.global.take(now,m.cfg.GlobalRate,m.cfg.GlobalBurst){return false}

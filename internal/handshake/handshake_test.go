@@ -66,7 +66,7 @@ func makeRDR(t *testing.T,caPriv ed25519.PrivateKey,id [16]byte,routerPub ed2551
 }
 
 func testLimiter(t *testing.T) *M1Limiter{
-	t.Helper();m,err:=NewM1Limiter(LimitConfig{GlobalRate:1000,GlobalBurst:100,PerInterfaceRate:1000,PerInterfaceBurst:100,PerPrefixRate:1000,PerPrefixBurst:100,MaxTrackedPrefixes:128,Interfaces:[]string{"lo","eth0","eth1"}});if err!=nil{t.Fatal(err)};return m
+	t.Helper();m,err:=NewM1Limiter(LimitConfig{GlobalRate:1000,GlobalBurst:100,PerInterfaceRate:1000,PerInterfaceBurst:100,PerPrefixRate:1000,PerPrefixBurst:100,MaxTrackedPrefixes:128,PrefixIdleTTL:time.Minute,Interfaces:[]string{"lo","eth0","eth1"}});if err!=nil{t.Fatal(err)};return m
 }
 
 func newPair(t *testing.T,lookupMode string,tamper byte)*pair{
@@ -166,7 +166,7 @@ func TestM1DoSLimitsAndNoStateBeforeCookie(t *testing.T){
 			ep:=netip.MustParseAddrPort("[2001:db8::10]:4444");record,_:=makeRDR(t,caPriv,rid,routerPub,ep,now,now.Add(-time.Minute),now.Add(time.Hour))
 			lookup:=func(context.Context,[16]byte)(uint16,[]byte,error){return directory.LookupUnknown,nil,nil}
 			dir,_:=directory.NewCache(caPub,time.Minute,lookup);cookies,_:=NewCookieManager(func()time.Time{return now})
-			limiter,err:=NewM1Limiter(LimitConfig{GlobalRate:tc.global,GlobalBurst:tc.globalBurst,PerInterfaceRate:tc.iface,PerInterfaceBurst:tc.ifaceBurst,PerPrefixRate:tc.prefix,PerPrefixBurst:tc.prefixBurst,MaxTrackedPrefixes:32,Interfaces:[]string{"eth0","eth1"}});if err!=nil{t.Fatal(err)}
+			limiter,err:=NewM1Limiter(LimitConfig{GlobalRate:tc.global,GlobalBurst:tc.globalBurst,PerInterfaceRate:tc.iface,PerInterfaceBurst:tc.ifaceBurst,PerPrefixRate:tc.prefix,PerPrefixBurst:tc.prefixBurst,MaxTrackedPrefixes:32,PrefixIdleTTL:time.Minute,Interfaces:[]string{"eth0","eth1"}});if err!=nil{t.Fatal(err)}
 			r,err:=NewResponder(ResponderConfig{LocalRecord:record,PrivateKey:routerPriv,CAPublicKey:caPub,Directory:dir,Cookies:cookies,Limiter:limiter,MaxPending:8,MaxPendingPerPrefix:4,PendingTTL:3*time.Second,Now:func()time.Time{return now}});if err!=nil{t.Fatal(err)}
 			var initiatorID [16]byte;initiatorID[0]=7;var eph [32]byte;eph[0]=1;var nonce [32]byte;nonce[0]=2
 			first:=buildM1(m1Fields{Nonce:nonce,InitiatorID:initiatorID,DestinationID:rid,Ephemeral:eph})
@@ -207,4 +207,12 @@ func TestCookieM1HasNoTrailingPaddingOrUnknownFlags(t *testing.T){
 
 func TestM2M3LengthsAreFrozen(t *testing.T){
 	if len(frame(TypeM2,make([]byte,M2BodySize)))!=252||len(frame(TypeM3,make([]byte,M3BodySize)))!=186||len(frame(TypeM4,make([]byte,M4BodySize)))!=72{t.Fatal("M2/M3/M4 frozen sizes changed")}
+}
+
+func TestM1LimiterExpiresIdlePrefixEntries(t *testing.T) {
+	now:=time.Unix(1800000000,0)
+	limiter,err:=NewM1Limiter(LimitConfig{GlobalRate:100,GlobalBurst:10,PerInterfaceRate:100,PerInterfaceBurst:10,PerPrefixRate:100,PerPrefixBurst:10,MaxTrackedPrefixes:1,PrefixIdleTTL:10*time.Second,Interfaces:[]string{"eth0"}})
+	if err!=nil{t.Fatal(err)}
+	if !limiter.Allow(now,netip.MustParseAddr("2001:db8:1::1"),"eth0"){t.Fatal("first prefix should be allowed")}
+	if !limiter.Allow(now.Add(11*time.Second),netip.MustParseAddr("2001:db8:2::1"),"eth0"){t.Fatal("idle prefix slot should be reclaimed")}
 }

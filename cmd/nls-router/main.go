@@ -157,6 +157,7 @@ func handshakeListen(args []string)error{
 	ifaceBurst:=fs.Float64("interface-burst",0,"required per-interface M1 burst")
 	prefixRate:=fs.Float64("prefix-rate",0,"required per-source-/64 M1 tokens per second")
 	prefixBurst:=fs.Float64("prefix-burst",0,"required per-source-/64 M1 burst")
+	prefixIdleTTL:=fs.Duration("prefix-idle-ttl",0,"required idle lifetime before a tracked source-/64 slot can be reclaimed")
 	maxPrefixes:=fs.Int("max-tracked-prefixes",0,"required maximum tracked source-/64 prefixes")
 	maxPending:=fs.Int("max-pending",0,"required maximum global pending handshakes")
 	maxPendingPrefix:=fs.Int("max-pending-per-prefix",0,"required maximum pending handshakes per source-/64")
@@ -164,7 +165,7 @@ func handshakeListen(args []string)error{
 	if err:=fs.Parse(args);err!=nil{return err};if fs.NArg()!=0{return fmt.Errorf("unexpected positional arguments")}
 	if strings.TrimSpace(*ingress)==""{return fmt.Errorf("--ingress-interface is required")}
 	files,err:=loadHandshakeFiles(*localRDR,*caCert,*fingerprint,*cert,*key,*controlAddress,*tlsName);if err!=nil{return err}
-	limiter,err:=nlsHandshake.NewM1Limiter(nlsHandshake.LimitConfig{GlobalRate:*globalRate,GlobalBurst:*globalBurst,PerInterfaceRate:*ifaceRate,PerInterfaceBurst:*ifaceBurst,PerPrefixRate:*prefixRate,PerPrefixBurst:*prefixBurst,MaxTrackedPrefixes:*maxPrefixes,Interfaces:[]string{*ingress}});if err!=nil{return err}
+	limiter,err:=nlsHandshake.NewM1Limiter(nlsHandshake.LimitConfig{GlobalRate:*globalRate,GlobalBurst:*globalBurst,PerInterfaceRate:*ifaceRate,PerInterfaceBurst:*ifaceBurst,PerPrefixRate:*prefixRate,PerPrefixBurst:*prefixBurst,MaxTrackedPrefixes:*maxPrefixes,PrefixIdleTTL:*prefixIdleTTL,Interfaces:[]string{*ingress}});if err!=nil{return err}
 	cookies,err:=nlsHandshake.NewCookieManager(time.Now);if err!=nil{return err}
 	responder,err:=nlsHandshake.NewResponder(nlsHandshake.ResponderConfig{LocalRecord:files.record,PrivateKey:files.private,CAPublicKey:files.caPublic,Directory:files.cache,Cookies:cookies,Limiter:limiter,MaxPending:*maxPending,MaxPendingPerPrefix:*maxPendingPrefix,PendingTTL:*pendingTTL,OnEstablished:func(s nlsHandshake.Session){fmt.Printf("peer handshake authenticated: %x\n",s.PeerRouterID)}});if err!=nil{return err}
 	conn,err:=net.ListenUDP("udp6",&net.UDPAddr{IP:net.IP(files.record.Endpoint.Addr().AsSlice()),Port:int(files.record.Endpoint.Port())});if err!=nil{return err};defer conn.Close()
@@ -180,7 +181,7 @@ Usage:
   nls-router enroll --address HOST:PORT --tls-name DNS --ca-cert ca-cert.pem --ca-fingerprint SHA256 --name NAME [--key router-key.pem] [--csr router.csr.pem]
   nls-router control --address HOST:PORT --tls-name DNS --ca-cert ca-cert.pem --ca-fingerprint SHA256 [--cert router-cert.pem] [--key router-key.pem] [--state-dir /var/lib/nls-router]
   nls-router handshake --local-rdr local.rdr --control-address HOST:PORT --tls-name DNS --ca-cert ca-cert.pem --ca-fingerprint SHA256 --peer-id HEX --wan-address IPv6 --wan-prefix PREFIX --interface IFACE --dad-timeout DURATION --dad-poll-interval DURATION
-  nls-router handshake-listen --local-rdr local.rdr --control-address HOST:PORT --tls-name DNS --ca-cert ca-cert.pem --ca-fingerprint SHA256 --ingress-interface IFACE --global-rate N --global-burst N --interface-rate N --interface-burst N --prefix-rate N --prefix-burst N --max-tracked-prefixes N --max-pending N --max-pending-per-prefix N
+  nls-router handshake-listen --local-rdr local.rdr --control-address HOST:PORT --tls-name DNS --ca-cert ca-cert.pem --ca-fingerprint SHA256 --ingress-interface IFACE --global-rate N --global-burst N --interface-rate N --interface-burst N --prefix-rate N --prefix-burst N --prefix-idle-ttl DURATION --max-tracked-prefixes N --max-pending N --max-pending-per-prefix N
 
 Enrollment token is read only from NLS_ENROLLMENT_TOKEN.
 `)
