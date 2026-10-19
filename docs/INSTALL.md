@@ -22,7 +22,7 @@ The build uses `CGO_ENABLED=0`, `-trimpath`, and a single main package. A static
 ```sh
 sudo apt-get update
 sudo apt-get install -y golang-go make
-sudo ./scripts/install-router.sh install
+sudo bash ./scripts/install-router.sh install
 sudoedit /etc/nls-router/router.env
 ```
 
@@ -43,13 +43,13 @@ The current router service runs the authenticated control client. It requires a 
 ## Uninstall
 
 ```sh
-sudo ./scripts/install-router.sh uninstall
+sudo bash ./scripts/install-router.sh uninstall
 ```
 
 Uninstall stops/disables the unit and removes the installed binary, wrapper, and unit. It deliberately preserves `/etc/nls-router` and `/var/lib/nls-router`. To delete those too, explicitly run:
 
 ```sh
-sudo PURGE_NLS_ROUTER=1 ./scripts/install-router.sh uninstall
+sudo env PURGE_NLS_ROUTER=1 bash ./scripts/install-router.sh uninstall
 ```
 
 This purge is destructive. Back up certificates and state first.
