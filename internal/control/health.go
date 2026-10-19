@@ -1,6 +1,6 @@
 package control
 
-import "time"
+import ("time"; "sync")
 
 const DefaultControlLossTimeout = 300 * time.Second
 
