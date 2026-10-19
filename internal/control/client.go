@@ -89,7 +89,7 @@ func Run(ctx context.Context,o Options)error {
 		dialer:=net.Dialer{Timeout:10*time.Second}
 		conn,err:=tls.DialWithDialer(&dialer,"tcp",o.Address,cfg)
 		if err==nil {
-			err=runSession(ctx,conn,o.Interval,policyPath,revPath,func(now time.Time){publish(guard.MarkSuccess(now))})
+			_ = runSession(ctx,conn,o.Interval,policyPath,revPath,func(now time.Time){publish(guard.MarkSuccess(now))})
 			_ = conn.Close()
 		}
 		if ctx.Err()!=nil{return nil}
