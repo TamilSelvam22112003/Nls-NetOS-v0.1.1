@@ -42,6 +42,7 @@ type Options struct {
 	PrivateKeyPath string
 	StateDir string
 	Interval time.Duration
+	ControlLossTimeout time.Duration
 }
 
 type PolicyEntry struct {
@@ -67,6 +68,7 @@ func Run(ctx context.Context,o Options)error {
 		return errors.New("address, TLS name, CA certificate/fingerprint, router certificate/key, and state directory are required")
 	}
 	if o.Interval<=0{o.Interval=5*time.Second}
+	if o.ControlLossTimeout<=0{o.ControlLossTimeout=DefaultControlLossTimeout}
 	rootPEM,err:=os.ReadFile(o.RootCertificatePath);if err!=nil{return err}
 	block,_:=pemDecode(rootPEM);if block==nil{return errors.New("invalid CA root certificate")}
 	root,err:=x509.ParseCertificate(block);if err!=nil{return err}
@@ -78,22 +80,27 @@ func Run(ctx context.Context,o Options)error {
 	if err=os.Chmod(o.StateDir,0700);err!=nil{return err}
 	policyPath:=filepath.Join(o.StateDir,"policy.json")
 	revPath:=filepath.Join(o.StateDir,"revocations.json")
+	healthPath:=filepath.Join(o.StateDir,"control-status.json")
+	guard:=NewLossGuard(o.ControlLossTimeout)
+	publish:=func(state HealthState){_ = writeJSONAtomic(healthPath,state,0600)}
 	for {
 		if ctx.Err()!=nil{return nil}
 		cfg:=&tls.Config{RootCAs:roots,ServerName:o.ServerName,Certificates:[]tls.Certificate{clientCert},MinVersion:tls.VersionTLS13,MaxVersion:tls.VersionTLS13}
 		dialer:=net.Dialer{Timeout:10*time.Second}
 		conn,err:=tls.DialWithDialer(&dialer,"tcp",o.Address,cfg)
-		if err!=nil{return fmt.Errorf("mTLS control connection: %w",err)}
-		err=runSession(ctx,conn,o.Interval,policyPath,revPath)
-		_ = conn.Close()
-		if err!=nil {
-			if ctx.Err()!=nil{return nil}
-			return err
+		if err==nil {
+			err=runSession(ctx,conn,o.Interval,policyPath,revPath,func(now time.Time){publish(guard.MarkSuccess(now))})
+			_ = conn.Close()
 		}
+		if ctx.Err()!=nil{return nil}
+		publish(guard.MarkFailure(time.Now()))
+		// Control outages are recoverable: reconnect instead of exiting. The
+		// persisted health state flags sessions for teardown after the ADR-0007 deadline.
+		select{case <-ctx.Done():return nil;case <-time.After(o.Interval):}
 	}
 }
 
-func runSession(ctx context.Context,conn net.Conn,interval time.Duration,policyPath,revPath string)error {
+func runSession(ctx context.Context,conn net.Conn,interval time.Duration,policyPath,revPath string,onSync func(time.Time))error {
 	ticker:=time.NewTicker(interval);defer ticker.Stop()
 	for {
 		if ctx.Err()!=nil{return nil}
@@ -136,6 +143,7 @@ func runSession(ctx context.Context,conn net.Conn,interval time.Duration,policyP
 			if parseErr!=nil{status,code=1,1}else if rev.Generation>lastRev { if err=writeJSONAtomic(revPath,rev,0600);err!=nil{status,code=1,0x0016} }
 			if err=writeTLV(conn,tlvPolicyAck,policyAck(rev.Generation,status,code));err!=nil{return err}
 			if status!=0{return fmt.Errorf("revocation sync rejected: %v",parseErr)}
+			if onSync!=nil { onSync(time.Now()) }
 		} else {
 			// A missing push is not legal in this version; it means the server and client disagree on generation state.
 			return errors.New("expected REVOCATION_PUSH")

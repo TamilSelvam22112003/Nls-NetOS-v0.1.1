@@ -68,9 +68,10 @@ func controlClient(args []string)error {
 	key:=fs.String("key","router-key.pem","router private key PEM")
 	stateDir:=fs.String("state-dir","/var/lib/nls-router","persistent policy/revocation state directory")
 	interval:=fs.Duration("interval",5*time.Second,"heartbeat/sync interval")
+	controlLossTimeout:=fs.Duration("control-loss-timeout",control.DefaultControlLossTimeout,"drop existing sessions after this much control loss (default 5m)")
 	if err:=fs.Parse(args);err!=nil{return err};if fs.NArg()!=0{return fmt.Errorf("unexpected positional arguments")}
 	ctx,stop:=signal.NotifyContext(context.Background(),os.Interrupt,syscall.SIGTERM);defer stop()
-	return control.Run(ctx,control.Options{Address:*address,ServerName:*serverName,RootCertificatePath:*caCert,RootFingerprint:*fingerprint,CertificatePath:*cert,PrivateKeyPath:*key,StateDir:*stateDir,Interval:*interval})
+	return control.Run(ctx,control.Options{Address:*address,ServerName:*serverName,RootCertificatePath:*caCert,RootFingerprint:*fingerprint,CertificatePath:*cert,PrivateKeyPath:*key,StateDir:*stateDir,Interval:*interval,ControlLossTimeout:*controlLossTimeout})
 }
 
 func usage() {
