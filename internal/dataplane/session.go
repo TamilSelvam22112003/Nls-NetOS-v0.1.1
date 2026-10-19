@@ -291,7 +291,7 @@ func DeriveRekeyKeys(shared []byte,oldTranscript,rekeyTranscript [32]byte)(Keys,
 	var out Keys
 	if len(shared)!=32 { return out,ErrBadRekey }
 	saltHash:=sha256.Sum256(append(append([]byte{},oldTranscript[:]...),rekeyTranscript[:]...))
-	derive:=func(label string,n int)([]byte,error){r:=hkdf.New(sha256.New,shared,saltHash[:],[]byte(label));b:=make([]byte,n);_,err:=ioReadFull(r,b);return b,err}
+	derive:=func(label string,n int)([]byte,error){r:=hkdf.New(sha256.New,shared,saltHash[:],[]byte(label));b:=make([]byte,n);err:=ioReadFull(r,b);return b,err}
 	for _,x:=range []struct{label string;dst []byte}{{"NLS-v1 rekey i2r",out.I2R[:]},{"NLS-v1 rekey r2i",out.R2I[:]},{"NLS-v1 nonce i2r",out.SaltI2R[:]},{"NLS-v1 nonce r2i",out.SaltR2I[:]}}{b,e:=derive(x.label,len(x.dst));if e!=nil{return Keys{},e};copy(x.dst,b)}
 	return out,nil
 }
