@@ -100,7 +100,7 @@ func (r *Router) Run(ctx context.Context)error {
 				errCh<-err;return
 			}
 			if n>MaxUDPPayload{continue}
-			source,err:=netAddrPort(from);if err!=nil{continue}
+			source,err:=udpAddrPort(from);if err!=nil{continue}
 			_ = r.handleInbound(append([]byte(nil),buf[:n]...),source)
 		}
 	}()
@@ -109,4 +109,11 @@ func (r *Router) Run(ctx context.Context)error {
 func (r *Router) Close()error {
 	e1:=r.TUN.Close();e2:=r.UDP.Close()
 	if e1!=nil{return e1};return e2
+}
+
+func udpAddrPort(a net.Addr)(netip.AddrPort,error) {
+	u,ok:=a.(*net.UDPAddr);if !ok{return netip.AddrPort{},fmt.Errorf("expected UDP address, got %T",a)}
+	ip,ok:=netip.AddrFromSlice(u.IP);if !ok{return netip.AddrPort{},errors.New("invalid UDP source address")}
+	if ip.Is4In6(){ip=ip.Unmap()}
+	return netip.AddrPortFrom(ip,uint16(u.Port)),nil
 }

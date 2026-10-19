@@ -104,7 +104,7 @@ type Keys struct {
 }
 func NewSession(cfg Config) (*Session,error) {
 	if cfg.SessionID==0 { return nil,errors.New("session ID must be nonzero") }
-	if allZero(cfg.NonceID[:]) { return nil,errors.New("session nonce ID must be nonzero") }
+	if allZeroBytes(cfg.NonceID[:]) { return nil,errors.New("session nonce ID must be nonzero") }
 	if cfg.InnerMTU==0 { cfg.InnerMTU=DefaultInnerMTU }
 	if cfg.InnerMTU<1280 || cfg.InnerMTU>DefaultInnerMTU { return nil,fmt.Errorf("inner MTU must be 1280..%d",DefaultInnerMTU) }
 	if cfg.RekeyAfterPackets==0 { cfg.RekeyAfterPackets=RekeyPacketLimit }
@@ -128,6 +128,7 @@ func (s *Session) checkSendLimitLocked() error {
 	now:=s.now();if s.sendSeq>=s.rekeyAfterPackets || now.Before(s.lastRekey) || now.Sub(s.lastRekey)>=s.rekeyAfter { return ErrRekeyRequired }
 	return nil
 }
+func allZeroBytes(b []byte)bool{var v byte;for _,x:=range b{v|=x};return v==0}
 func nonce(salt [4]byte,seq uint64) []byte { n:=make([]byte,12);copy(n[:4],salt[:]);binary.BigEndian.PutUint64(n[4:],seq);return n }
 func commonHeader(typ byte,bodyLen int) []byte {
 	b:=make([]byte,CommonHeaderSize);b[0]=Version;b[1]=typ;binary.BigEndian.PutUint16(b[4:6],uint16(bodyLen));return b
@@ -249,7 +250,7 @@ func (s *Session) AcceptRekey(datagram []byte)(ack []byte,commit func()error,ret
 	if subtle.ConstantTimeCompare(expected,proposal[:])!=1||!ed25519.Verify(s.peerPublic,RekeySignatureInput(proposal,epoch,initPub),plain[68:132]){s.mu.Unlock();return nil,nil,ErrBadRekey}
 	curve:=ecdh.X25519();peerEph,err:=curve.NewPublicKey(initPub[:]);if err!=nil{s.mu.Unlock();return nil,nil,ErrBadRekey}
 	localEph,err:=curve.GenerateKey(rand.Reader);if err!=nil{s.mu.Unlock();return nil,nil,err}
-	shared,err:=localEph.ECDH(peerEph);if err!=nil||allZero(shared){s.mu.Unlock();return nil,nil,ErrBadRekey}
+	shared,err:=localEph.ECDH(peerEph);if err!=nil||allZeroBytes(shared){s.mu.Unlock();return nil,nil,ErrBadRekey}
 	var ackPub [32]byte;copy(ackPub[:],localEph.PublicKey().Bytes())
 	ackBody:=make([]byte,132);binary.BigEndian.PutUint32(ackBody[:4],epoch);copy(ackBody[4:36],ackPub[:]);copy(ackBody[36:68],proposal[:]);copy(ackBody[68:],ed25519.Sign(s.localPrivate,RekeySignatureInput(proposal,epoch,ackPub)))
 	ack,err=s.encryptControlLocked(TypeRekeyAck,ackBody);s.mu.Unlock();if err!=nil{return nil,nil,err}
@@ -267,7 +268,7 @@ func (s *Session) CompleteRekey(datagram []byte)error {
 	pending:=s.pending
 	if pending==nil||binary.BigEndian.Uint32(plain[:4])!=pending.epoch||subtle.ConstantTimeCompare(plain[36:68],pending.transcript[:])!=1||!ed25519.Verify(s.peerPublic,RekeySignatureInput(pending.transcript,pending.epoch,bytes32(plain[4:36])),plain[68:132]){s.mu.Unlock();return ErrBadRekey}
 	curve:=ecdh.X25519();priv,err:=curve.NewPrivateKey(pending.private);if err!=nil{s.mu.Unlock();return ErrBadRekey};peerPub,err:=curve.NewPublicKey(plain[4:36]);if err!=nil{s.mu.Unlock();return ErrBadRekey}
-	shared,err:=priv.ECDH(peerPub);if err!=nil||allZero(shared){s.mu.Unlock();return ErrBadRekey}
+	shared,err:=priv.ECDH(peerPub);if err!=nil||allZeroBytes(shared){s.mu.Unlock();return ErrBadRekey}
 	oldTranscript:=s.transcriptHash;initBody:=append([]byte(nil),pending.initBody...);epoch:=pending.epoch;s.mu.Unlock()
 	rekeyTranscript:=sha256.Sum256(append(append([]byte{},initBody...),plain...))
 	keys,err:=DeriveRekeyKeys(shared,oldTranscript,rekeyTranscript);if err!=nil{return err}
