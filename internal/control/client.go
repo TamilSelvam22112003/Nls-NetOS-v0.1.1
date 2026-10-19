@@ -213,8 +213,7 @@ func writeTLV(w io.Writer,typ uint16,value []byte)error {
 }
 func writeFull(w io.Writer,b []byte)error{for len(b)>0{n,err:=w.Write(b);if err!=nil{return err};if n==0{return io.ErrShortWrite};b=b[n:]};return nil}
 func writeJSONAtomic(path string,v any,mode os.FileMode)error {
-	data,err:=json.MarshalIndent(v,"","  ");if err!=nil{return err};data=append(data,'
-')
+	data,err:=json.MarshalIndent(v,"","  ");if err!=nil{return err};data=append(data,byte(10))
 	if err=os.MkdirAll(filepath.Dir(path),0700);err!=nil{return err}
 	f,err:=os.CreateTemp(filepath.Dir(path),".nls-state-*");if err!=nil{return err};tmp:=f.Name();defer os.Remove(tmp)
 	if err=f.Chmod(mode);err!=nil{_ = f.Close();return err}
