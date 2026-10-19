@@ -1,5 +1,7 @@
-# ADR-0004: Control channel
-- Status: Proposed. Decision: TLS 1.3 mutual authentication plus explicit router-ID authorization.
-- Rationale: mature transport confidentiality/integrity and key handling.
-- Alternative rejected: custom authenticated TCP.
-- Consequence: Go TLS expects X.509; owner must choose X.509 router certs or separate TLS transport identity and compact NLS identity before Step 2.
+# ADR-0004: Control channel and enrollment bootstrap
+- Status: Accepted
+- Date: 2026-10-19
+- Decision: TLS 1.3. Bootstrap uses server-authenticated TLS, configured Router-CA root fingerprint pinning, and single-use expiring token scoped to router name and bound to SHA-256(CSR public key). mTLS begins only after certificate issuance. X.509 is only for control TLS.
+- Rationale: secure first enrollment without a pre-existing client certificate.
+- Alternative rejected: require mTLS before issuance or custom unauthenticated enrollment.
+- Consequence: atomic token consumption; never log tokens. See PROTOCOL.md §3.
