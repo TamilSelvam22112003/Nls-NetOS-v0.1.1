@@ -88,8 +88,8 @@ func NewEstablishedSession(config SessionConfig, now time.Time) (*Session, error
 	if err := proto.ValidateOuterTuple(config.ReceiveOuter); err != nil {
 		return nil, fmt.Errorf("%w: receive outer tuple: %v", ErrSessionConfig, err)
 	}
-	if !sameAddressAndPort(config.SendOuter.SourceIPv6, config.ReceiveOuter.DestinationIPv6) ||
-		!sameAddressAndPort(config.SendOuter.DestinationIPv6, config.ReceiveOuter.SourceIPv6) ||
+	if config.SendOuter.SourceIPv6 != config.ReceiveOuter.DestinationIPv6 ||
+		config.SendOuter.DestinationIPv6 != config.ReceiveOuter.SourceIPv6 ||
 		config.SendOuter.SourcePort != config.ReceiveOuter.DestinationPort ||
 		config.SendOuter.DestinationPort != config.ReceiveOuter.SourcePort {
 		return nil, fmt.Errorf("%w: send/receive endpoint tuples are not reciprocal", ErrSessionConfig)
@@ -229,10 +229,6 @@ func sameOuterTuple(left, right proto.OuterTuple) bool {
 		left.DestinationIPv6 == right.DestinationIPv6 &&
 		left.SourcePort == right.SourcePort &&
 		left.DestinationPort == right.DestinationPort
-}
-
-func sameAddressAndPort(left, right interface{ String() string }, unused ...any) bool {
-	return left.String() == right.String()
 }
 
 func allZero(value []byte) bool {
