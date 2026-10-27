@@ -13,5 +13,7 @@
 
 - Added destination-protection and Router-CA status profile drafts; neither is frozen or implemented.
 
+- Added destination-protection and Router-CA status profile drafts; not frozen or implemented.
+
 ## v0.1.1
 - Specification and scaffolding baseline only; no feature implementation.
